@@ -365,7 +365,7 @@ def main():
 
     parser.add_argument(
         '--output', '-o',
-        default=os.getenv('OUTPUT_FILE', 'nomenclature_export.xlsx'),
+        default=os.getenv('OUTPUT_FILE', 'nomen.xlsx'),
         help='Путь к выходному Excel-файлу'
     )
     parser.add_argument(
