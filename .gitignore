@@ -1,1 +1,13 @@
-Nothing should be ignored based on the provided file changes, as only a Python source file (`excel_to_word.py`) was modified and no build artifacts, dependencies, or temporary files were included in the changes.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+
+# Generated documents
+output/
+```
