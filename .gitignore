@@ -1,0 +1,7 @@
+```
+# Logs and temp files
+*.log
+
+# Output directories
+output/
+```
