@@ -66,7 +66,8 @@ def detect_header_row(df_raw, min_row=5):
 def load_sheet_with_header_detection(input_file, sheet_name):
     """
     Загрузка листа с автоопределением заголовка
-    Берет заголовки из 6-й строки (индекс 5) или позже, исключая Unnamed поля
+    Для листа ЕСКЛП: заголовки в строке 6 (индекс 5), данные с 7 строки
+    Для остальных листов: заголовки в строке 1 (индекс 0), данные со 2 строки
     
     Args:
         input_file: Путь к файлу Excel
@@ -75,15 +76,21 @@ def load_sheet_with_header_detection(input_file, sheet_name):
     Returns:
         DataFrame с правильными заголовками
     """
-    # Сначала загружаем без заголовков для определения строки заголовка
-    df_raw = pd.read_excel(input_file, sheet_name=sheet_name, header=None)
-    
-    # Определяем строку заголовка
-    header_row_idx = detect_header_row(df_raw, min_row=5)
-    logger.info(f"  Заголовок найден в строке {header_row_idx + 1}")
-    
-    # Загружаем с правильной строкой заголовка
-    df = pd.read_excel(input_file, sheet_name=sheet_name, header=header_row_idx)
+    # Для листа ЕСКЛП используем автоопределение заголовка
+    if sheet_name == 'ЕСКЛП':
+        # Сначала загружаем без заголовков для определения строки заголовка
+        df_raw = pd.read_excel(input_file, sheet_name=sheet_name, header=None)
+        
+        # Определяем строку заголовка (начиная с минRow=5)
+        header_row_idx = detect_header_row(df_raw, min_row=5)
+        logger.info(f"  Заголовок найден в строке {header_row_idx + 1}")
+        
+        # Загружаем с правильной строкой заголовка
+        df = pd.read_excel(input_file, sheet_name=sheet_name, header=header_row_idx)
+    else:
+        # Для остальных листов заголовок в первой строке
+        df = pd.read_excel(input_file, sheet_name=sheet_name, header=0)
+        logger.info(f"  Заголовок в строке 1")
     
     # Фильтруем колонки, исключая Unnamed
     valid_columns = [col for col in df.columns if not (pd.isna(col) or str(col).lower().startswith('unnamed'))]

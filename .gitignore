@@ -1,13 +1,1 @@
-```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Logs
-*.log
-
-# Generated documents
-output/
-```
+Nothing needs to be added to .gitignore since only a Python source file (`excel_to_word.py`) was modified and no build artifacts, dependencies, or temporary files were detected in the changes.
