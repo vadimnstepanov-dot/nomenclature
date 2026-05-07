@@ -42,6 +42,133 @@ def set_cell_background(cell, color):
     shd.set(qn('w:fill'), color)
 
 
+def detect_header_row(df_raw, min_row=5):
+    """
+    Автоопределение строки заголовка
+    Ищем первую строку после min_row, которая содержит осмысленные данные (не NaN и не Unnamed)
+    
+    Args:
+        df_raw: DataFrame без заголовков
+        min_row: Минимальный индекс строки для поиска заголовка
+    
+    Returns:
+        Индекс строки заголовка
+    """
+    for idx in range(min_row, len(df_raw)):
+        row = df_raw.iloc[idx]
+        # Проверяем, есть ли в строке значения, которые не являются Unnamed
+        non_unnamed_count = sum(1 for val in row if pd.notna(val) and not str(val).lower().startswith('unnamed'))
+        if non_unnamed_count > 0:
+            return idx
+    return min_row
+
+
+def load_sheet_with_header_detection(input_file, sheet_name):
+    """
+    Загрузка листа с автоопределением заголовка
+    Берет заголовки из 6-й строки (индекс 5) или позже, исключая Unnamed поля
+    
+    Args:
+        input_file: Путь к файлу Excel
+        sheet_name: Имя листа
+    
+    Returns:
+        DataFrame с правильными заголовками
+    """
+    # Сначала загружаем без заголовков для определения строки заголовка
+    df_raw = pd.read_excel(input_file, sheet_name=sheet_name, header=None)
+    
+    # Определяем строку заголовка
+    header_row_idx = detect_header_row(df_raw, min_row=5)
+    logger.info(f"  Заголовок найден в строке {header_row_idx + 1}")
+    
+    # Загружаем с правильной строкой заголовка
+    df = pd.read_excel(input_file, sheet_name=sheet_name, header=header_row_idx)
+    
+    # Фильтруем колонки, исключая Unnamed
+    valid_columns = [col for col in df.columns if not (pd.isna(col) or str(col).lower().startswith('unnamed'))]
+    
+    if len(valid_columns) < len(df.columns):
+        logger.info(f"  Исключено {len(df.columns) - len(valid_columns)} колонок Unnamed")
+    
+    df = df[valid_columns]
+    
+    return df
+
+
+def analyze_column_uniqueness(df, column):
+    """
+    Анализ уникальности значений в колонке
+    
+    Returns:
+        dict: Статистика уникальности
+    """
+    values = df[column].dropna()
+    total_count = len(values)
+    unique_count = values.nunique()
+    
+    if total_count == 0:
+        return {
+            'total': 0,
+            'unique': 0,
+            'uniqueness_percent': 0,
+            'is_unique': False,
+            'duplicate_count': 0
+        }
+    
+    uniqueness_percent = round(unique_count / total_count * 100, 2)
+    duplicate_count = total_count - unique_count
+    
+    return {
+        'total': total_count,
+        'unique': unique_count,
+        'uniqueness_percent': uniqueness_percent,
+        'is_unique': uniqueness_percent == 100.0,
+        'duplicate_count': duplicate_count
+    }
+
+
+def detect_pk_fk(df, column_name):
+    """
+    Автоопределение типа ключа (PK/FK) для колонки
+    
+    Returns:
+        str: Тип ключа ('PK', 'FK', 'Potential PK', 'Potential FK', '')
+    """
+    col_lower = str(column_name).lower()
+    uniqueness = analyze_column_uniqueness(df, column_name)
+    
+    # Проверка на первичный ключ по имени
+    pk_patterns = ['id', 'guid', 'uuid', 'код', 'code', 'primary']
+    is_pk_by_name = any(pattern in col_lower for pattern in pk_patterns)
+    
+    # Проверка на внешний ключ по имени
+    fk_patterns = ['_id', 'id_', 'parent', 'родитель', 'foreign', 'ref', 'ссылка']
+    is_fk_by_name = any(pattern in col_lower for pattern in fk_patterns)
+    
+    # Если колонка уникальна на 100% и имеет признаки PK
+    if uniqueness['is_unique'] and is_pk_by_name:
+        return 'PK'
+    
+    # Если колонка уникальна на 100% и похожа на идентификатор
+    if uniqueness['is_unique'] and ('guid' in col_lower or 'uuid' in col_lower or col_lower == 'id'):
+        return 'PK'
+    
+    # Если колонка имеет признаки FK
+    if is_fk_by_name and uniqueness['uniqueness_percent'] < 100:
+        return 'FK'
+    
+    # Потенциальный PK (уникален, но имя не явно указывает)
+    if uniqueness['is_unique']:
+        return 'Potential PK'
+    
+    # Потенциальный FK (имя указывает, но не уникален)
+    if is_fk_by_name:
+        return 'Potential FK'
+    
+    return ''
+
+
 def create_word_report_from_excel(input_file=None, output_dir=None, mode='single'):
     """
     Создание отчетов Word из файла Excel
@@ -84,8 +211,8 @@ def create_word_report_from_excel(input_file=None, output_dir=None, mode='single
             for sheet_name in sheet_names:
                 logger.info(f"Обработка листа: {sheet_name}")
                 
-                # Загружаем данные листа
-                df = pd.read_excel(input_file, sheet_name=sheet_name)
+                # Загружаем данные листа с автоопределением заголовка и фильтрацией Unnamed
+                df = load_sheet_with_header_detection(input_file, sheet_name)
                 logger.info(f"  Загружено строк: {len(df)}, колонок: {len(df.columns)}")
                 
                 # Создаем документ Word
@@ -204,9 +331,18 @@ def create_word_report_from_excel(input_file=None, output_dir=None, mode='single
             
             # Загружаем все листы заранее для анализа взаимосвязей
             all_sheets_data = {}
+            all_sheets_pk_fk_info = {}  # Информация о PK/FK для каждого листа
             for sheet_name in sheet_names:
-                df = pd.read_excel(input_file, sheet_name=sheet_name)
+                df = load_sheet_with_header_detection(input_file, sheet_name)
                 all_sheets_data[sheet_name] = df
+                
+                # Анализируем PK/FK для каждой колонки
+                pk_fk_info = {}
+                for col in df.columns:
+                    key_type = detect_pk_fk(df, col)
+                    if key_type:
+                        pk_fk_info[col] = key_type
+                all_sheets_pk_fk_info[sheet_name] = pk_fk_info
             
             # ОБЩАЯ СТАТИСТИКА ПО ВСЕМ ЛИСТАМ
             overall_stats_heading = doc.add_heading("Общая статистика по файлу", level=1)
@@ -252,13 +388,118 @@ def create_word_report_from_excel(input_file=None, output_dir=None, mode='single
             
             doc.add_paragraph()
             
-            # АНАЛИЗ ВЗАИМОСВЯЗЕЙ ЛИСТОВ
+            # АНАЛИЗ ВЗАИМОСВЯЗЕЙ ЛИСТОВ С PK/FK
             doc.add_heading("Анализ взаимосвязей листов", level=2)
+            
+            # Анализ найденных PK и FK
+            all_pks = {}  # {column_name: [(sheet, col), ...]}
+            all_fks = {}  # {column_name: [(sheet, col), ...]}
+            
+            for sheet_name, pk_fk_info in all_sheets_pk_fk_info.items():
+                for col, key_type in pk_fk_info.items():
+                    if key_type == 'PK':
+                        if col not in all_pks:
+                            all_pks[col] = []
+                        all_pks[col].append((sheet_name, col))
+                    elif key_type in ['FK', 'Potential FK']:
+                        if col not in all_fks:
+                            all_fks[col] = []
+                        all_fks[col].append((sheet_name, col))
+            
+            # Показываем найденные первичные ключи
+            if all_pks:
+                doc.add_paragraph(f"Найдено первичных ключей (PK): {len(all_pks)}", style='List Bullet')
+                pk_table = doc.add_table(rows=1, cols=3)
+                pk_table.style = 'Table Grid'
+                pk_headers = ['Колонка', 'Лист', 'Уникальность']
+                header_row = pk_table.rows[0]
+                for i, header in enumerate(pk_headers):
+                    cell = header_row.cells[i]
+                    cell.text = header
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+                
+                for col, locations in sorted(all_pks.items()):
+                    for sheet, col_name in locations:
+                        df = all_sheets_data[sheet]
+                        uniqueness = analyze_column_uniqueness(df, col_name)
+                        row_cells = pk_table.add_row().cells
+                        row_cells[0].text = str(col)[:40]
+                        row_cells[1].text = str(sheet)[:30]
+                        row_cells[2].text = f"{uniqueness['uniqueness_percent']}% ({uniqueness['unique']}/{uniqueness['total']})"
+                doc.add_paragraph()
+            
+            # Показываем найденные внешние ключи
+            if all_fks:
+                doc.add_paragraph(f"Найдено внешних ключей (FK): {len(all_fks)}", style='List Bullet')
+                fk_table = doc.add_table(rows=1, cols=3)
+                fk_table.style = 'Table Grid'
+                fk_headers = ['Колонка', 'Лист', 'Уникальность']
+                header_row = fk_table.rows[0]
+                for i, header in enumerate(fk_headers):
+                    cell = header_row.cells[i]
+                    cell.text = header
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+                
+                for col, locations in sorted(all_fks.items()):
+                    for sheet, col_name in locations:
+                        df = all_sheets_data[sheet]
+                        uniqueness = analyze_column_uniqueness(df, col_name)
+                        row_cells = fk_table.add_row().cells
+                        row_cells[0].text = str(col)[:40]
+                        row_cells[1].text = str(sheet)[:30]
+                        row_cells[2].text = f"{uniqueness['uniqueness_percent']}% ({uniqueness['unique']}/{uniqueness['total']})"
+                doc.add_paragraph()
+            
+            # Анализ потенциальных связей между листами
+            doc.add_heading("Потенциальные связи между листами", level=3)
+            
+            # Ищем колонки с одинаковыми именами, где в одном листе это PK, а в другом FK
+            potential_relations = []
+            for pk_col, pk_locations in all_pks.items():
+                if pk_col in all_fks:
+                    fk_locations = all_fks[pk_col]
+                    for pk_sheet, _ in pk_locations:
+                        for fk_sheet, _ in fk_locations:
+                            if pk_sheet != fk_sheet:
+                                potential_relations.append({
+                                    'from_sheet': fk_sheet,
+                                    'to_sheet': pk_sheet,
+                                    'column': pk_col,
+                                    'type': 'FK → PK'
+                                })
+            
+            if potential_relations:
+                doc.add_paragraph(f"Найдено {len(potential_relations)} потенциальных связей:", style='List Bullet')
+                rel_table = doc.add_table(rows=1, cols=3)
+                rel_table.style = 'Table Grid'
+                rel_headers = ['От листа', 'К листу', 'По полю']
+                header_row = rel_table.rows[0]
+                for i, header in enumerate(rel_headers):
+                    cell = header_row.cells[i]
+                    cell.text = header
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+                
+                for rel in potential_relations[:20]:  # Ограничиваем количество
+                    row_cells = rel_table.add_row().cells
+                    row_cells[0].text = str(rel['from_sheet'])[:30]
+                    row_cells[1].text = str(rel['to_sheet'])[:30]
+                    row_cells[2].text = str(rel['column'])[:40]
+                
+                if len(potential_relations) > 20:
+                    doc.add_paragraph(f"... и еще {len(potential_relations) - 20} связей")
+            else:
+                doc.add_paragraph("Явные связи PK→FK между листами не найдены. Проверьте общие колонки ниже.", style='List Bullet')
             
             # Анализируем потенциальные ключевые поля для связей
             common_column_patterns = ['id', 'код', 'guid', 'uuid', 'name', 'наименование', 'parent', 'родитель']
             
-            doc.add_paragraph("Поиск общих колонок между листами:", style='List Bullet')
+            doc.add_paragraph("\nПоиск общих колонок между листами:", style='List Bullet')
             
             # Собираем все колонки из всех листов
             all_columns = {}
@@ -341,13 +582,13 @@ def create_word_report_from_excel(input_file=None, output_dir=None, mode='single
                 for stat in stats_info:
                     doc.add_paragraph(stat, style='List Bullet')
                 
-                # Детальная статистика по ВСЕМ колонкам с примером заполнения
+                # Детальная статистика по ВСЕМ колонкам с примером заполнения и PK/FK
                 stats_detail_heading = doc.add_heading("Заполненность по колонкам", level=3)
-                stats_table = doc.add_table(rows=1, cols=5)
+                stats_table = doc.add_table(rows=1, cols=7)
                 stats_table.style = 'Table Grid'
                 
                 # Заголовки таблицы статистики
-                stats_headers = ['Колонка', 'Заполнено', 'Пусто', '% заполнения', 'Пример значения']
+                stats_headers = ['Колонка', 'Тип ключа', 'Заполнено', 'Пусто', '% заполнения', '% уникальности', 'Пример значения']
                 header_row = stats_table.rows[0]
                 for i, header in enumerate(stats_headers):
                     cell = header_row.cells[i]
@@ -362,6 +603,13 @@ def create_word_report_from_excel(input_file=None, output_dir=None, mode='single
                     null_count = len(df) - non_null_count
                     fill_percent = round(non_null_count / len(df) * 100, 2) if len(df) > 0 else 0
                     
+                    # Анализ уникальности
+                    uniqueness = analyze_column_uniqueness(df, col)
+                    
+                    # Определение PK/FK
+                    key_type = detect_pk_fk(df, col)
+                    key_display = key_type if key_type else '-'
+                    
                     # Получаем пример первого непустого значения
                     example_value = ''
                     first_non_null = df[col][df[col].notna()]
@@ -370,10 +618,12 @@ def create_word_report_from_excel(input_file=None, output_dir=None, mode='single
                     
                     row_cells = stats_table.add_row().cells
                     row_cells[0].text = str(col)[:50]  # Ограничиваем длину названия
-                    row_cells[1].text = str(non_null_count)
-                    row_cells[2].text = str(null_count)
-                    row_cells[3].text = f"{fill_percent}%"
-                    row_cells[4].text = example_value
+                    row_cells[1].text = key_display
+                    row_cells[2].text = str(non_null_count)
+                    row_cells[3].text = str(null_count)
+                    row_cells[4].text = f"{fill_percent}%"
+                    row_cells[5].text = f"{uniqueness['uniqueness_percent']}%"
+                    row_cells[6].text = example_value
                 
                 doc.add_paragraph()  # Пустая строка
             
