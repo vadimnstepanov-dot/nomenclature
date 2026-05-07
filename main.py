@@ -12,7 +12,7 @@ pip install -r requirements.txt
    - rls_xml_to_xls.py (парсинг inventory.xml → лист "РЛС")
    - download_grls.py (скачивание ГРЛС → лист "ГРЛС")
    - download_esklp.py (скачивание ЕСКЛП → лист "ЕСКЛП")
-3. Загрузка Справочника ЦПЗ API на лист ЦПЗ
+3. Загрузка Справочника ЦПЗ из nomen.xlsx на лист ЦПЗ. nomen.xlsx запоняется  download_nomen.xlsx
 4. Загрузка справочника ePrica API на лист "ePrica"
 
 Дата: 2026
